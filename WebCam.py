@@ -1,104 +1,166 @@
 import cv2
-import mediapipe as mp
 import numpy as np
+import mediapipe as mp
+from collections import deque
+import pytesseract
+from PIL import Image
+import tkinter as tk
+from tkinter import scrolledtext
 
-# Initialize MediaPipe Hands and drawing utils
+# Initialize drawing points and indices
+bpoints = [deque(maxlen=1024)]
+gpoints = [deque(maxlen=1024)]
+rpoints = [deque(maxlen=1024)]
+ypoints = [deque(maxlen=1024)]
+
+# Other initial setup variables remain unchanged
+blue_index = 0
+green_index = 0
+red_index = 0
+yellow_index = 0
+
+# Canvas setup
+paintWindow = np.zeros((471, 636, 3)) + 255
+paintWindow = cv2.rectangle(paintWindow, (40, 1), (140, 65), (0, 0, 0), 2)
+paintWindow = cv2.rectangle(paintWindow, (160, 1), (255, 65), (255, 0, 0), 2)
+paintWindow = cv2.rectangle(paintWindow, (275, 1), (370, 65), (0, 255, 0), 2)
+paintWindow = cv2.rectangle(paintWindow, (390, 1), (485, 65), (0, 0, 255), 2)
+paintWindow = cv2.rectangle(paintWindow, (505, 1), (600, 65), (0, 255, 255), 2)
+
+cv2.putText(paintWindow, "CLEAR", (49, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+cv2.putText(paintWindow, "BLUE", (185, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+cv2.putText(paintWindow, "GREEN", (298, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+cv2.putText(paintWindow, "RED", (420, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+cv2.putText(paintWindow, "YELLOW", (520, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
+
+# Initialize Mediapipe
 mpHands = mp.solutions.hands
-hands = mpHands.Hands(max_num_hands=1)
+hands = mpHands.Hands(max_num_hands=1, min_detection_confidence=0.7)
 mpDraw = mp.solutions.drawing_utils
 
-# Set the width and height of the output screen
-frameWidth = 640
-frameHeight = 480
-
-# Capture video from the webcam
+# Initialize webcam
 cap = cv2.VideoCapture(0)
-cap.set(3, frameWidth)
-cap.set(4, frameHeight)
 
-# Color value for drawing (BGR format)
-drawColor = (255, 0, 0)
+# Function to preprocess image for OCR
+def preprocess_image_for_ocr(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary_image = cv2.threshold(blurred, 100, 255, cv2.THRESH_BINARY_INV)
+    return binary_image
 
-# Create a transparent canvas
-canvas = np.zeros((frameHeight, frameWidth, 4), dtype=np.uint8)
+# Function to perform OCR using pytesseract
+def perform_ocr(image):
+    preprocessed_image = preprocess_image_for_ocr(image)
+    pil_image = Image.fromarray(preprocessed_image)
+    text = pytesseract.image_to_string(pil_image)
+    return text
 
-# Initialize myPoints to store points [x, y, mode]
-myPoints = []
+# Function to open tkinter window for editable text
+def open_editable_text_window(recognized_text):
+    # Create a new tkinter window
+    root = tk.Tk()
+    root.title("Editable Text")
 
-# Function to draw and erase on the canvas
-def drawAndEraseOnCanvas(myPoints, drawColor, canvas):
-    for point in myPoints:
-        if point[2] == 'draw':
-            cv2.circle(canvas, point[:2], 10, drawColor + (255,), cv2.FILLED)
-        elif point[2] == 'erase':
-            cv2.circle(canvas, point[:2], 50, (0, 0, 0, 0), cv2.FILLED)
+    # Create a scrolled text box
+    text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=60, height=20, font=("Arial", 12))
+    text_area.pack(padx=10, pady=10)
 
-# Running an infinite loop so that the program keeps running until we close it
-while True:
-    try:
-        success, img = cap.read()
-        if not success:
-            break
+    # Insert the recognized text into the text box
+    text_area.insert(tk.INSERT, recognized_text)
 
-        # No flipping here for processing, but we'll flip for display later
-        imgResult = img.copy()
+    # Make the text box editable
+    text_area.config(state=tk.NORMAL)
 
-        # Convert the BGR image to RGB before processing
-        imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    # Start the tkinter loop
+    root.mainloop()
 
-        # Process the image to detect hands
-        results = hands.process(imgRGB)
+# Main loop
+ret = True
+while ret:
+    ret, frame = cap.read()
+    frame = cv2.flip(frame, 1)
+    framergb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        if results.multi_hand_landmarks:
-            for handLms in results.multi_hand_landmarks:
-                h, w, c = img.shape
+    # Drawing rectangles for UI
+    frame = cv2.rectangle(frame, (40, 1), (140, 65), (0, 0, 0), 2)
+    frame = cv2.rectangle(frame, (160, 1), (255, 65), (255, 0, 0), 2)
+    frame = cv2.rectangle(frame, (275, 1), (370, 65), (0, 255, 0), 2)
+    frame = cv2.rectangle(frame, (390, 1), (485, 65), (0, 0, 255), 2)
+    frame = cv2.rectangle(frame, (505, 1), (600, 65), (0, 255, 255), 2)
 
-                # Get the index fingertip position (landmark 8)
-                finger_tip = handLms.landmark[8]
-                cx, cy = int(finger_tip.x * w), int(finger_tip.y * h)
+    # Capture hand landmarks
+    result = hands.process(framergb)
 
-                # Get the bounding box of the hand to determine if the full palm is visible
-                x_min, y_min = w, h
-                x_max, y_max = 0, 0
-                for lm in handLms.landmark:
-                    x, y = int(lm.x * w), int(lm.y * h)
-                    x_min, y_min = min(x_min, x), min(y_min, y)
-                    x_max, y_max = max(x_max, x), max(y_max, y)
+    if result.multi_hand_landmarks:
+        landmarks = []
+        for handslms in result.multi_hand_landmarks:
+            for lm in handslms.landmark:
+                lmx = int(lm.x * 640)
+                lmy = int(lm.y * 480)
+                landmarks.append([lmx, lmy])
 
-                # Calculate the area of the bounding box
-                bbox_area = (x_max - x_min) * (y_max - y_min)
+            mpDraw.draw_landmarks(frame, handslms, mpHands.HAND_CONNECTIONS)
+        fore_finger = (landmarks[8][0], landmarks[8][1])
+        center = fore_finger
+        thumb = (landmarks[4][0], landmarks[4][1])
 
-                # Erase if the bounding box is large enough to represent the full palm
-                if bbox_area > 20000:  # Adjust the threshold according to your requirements
-                    myPoints.append((cx, cy, 'erase'))
-                else:
-                    # Append the position to the list of points for drawing
-                    myPoints.append((cx, cy, 'draw'))
+        if (thumb[1] - center[1] < 30):
+            # New stroke; append points for all colors
+            bpoints.append(deque(maxlen=512))
+            blue_index += 1
+            gpoints.append(deque(maxlen=512))
+            green_index += 1
+            rpoints.append(deque(maxlen=512))
+            red_index += 1
+            ypoints.append(deque(maxlen=512))
+            yellow_index += 1
 
-                # Draw the landmarks and connections on the hand
-                mpDraw.draw_landmarks(imgResult, handLms, mpHands.HAND_CONNECTIONS)
+        elif center[1] <= 65:
+            if 40 <= center[0] <= 140:  # Clear Button
+                bpoints = [deque(maxlen=512)]
+                gpoints = [deque(maxlen=512)]
+                rpoints = [deque(maxlen=512)]
+                ypoints = [deque(maxlen=512)]
+                blue_index = green_index = red_index = yellow_index = 0
+                paintWindow[67:, :, :] = 255
 
-        # Draw or erase on the canvas
-        if len(myPoints) != 0:
-            drawAndEraseOnCanvas(myPoints, drawColor, canvas)
+        else:
+            # Append to current deque
+            if colorIndex == 0:
+                bpoints[blue_index].appendleft(center)
+            elif colorIndex == 1:
+                gpoints[green_index].appendleft(center)
+            elif colorIndex == 2:
+                rpoints[red_index].appendleft(center)
+            elif colorIndex == 3:
+                ypoints[yellow_index].appendleft(center)
 
-        # Combine the canvas with the webcam feed
-        imgResult = cv2.addWeighted(imgResult, 1, canvas[:, :, :3], 1, 0)
+    # Draw lines on canvas
+    points = [bpoints, gpoints, rpoints, ypoints]
+    for i in range(len(points)):
+        for j in range(len(points[i])):
+            for k in range(1, len(points[i][j])):
+                if points[i][j][k - 1] is None or points[i][j][k] is None:
+                    continue
+                cv2.line(frame, points[i][j][k - 1], points[i][j][k], colors[i], 2)
+                cv2.line(paintWindow, points[i][j][k - 1], points[i][j][k], colors[i], 2)
 
-        # Flip the final result for display
-        imgResult = cv2.flip(imgResult, 1)
+    # Display the frame and paint window
+    cv2.imshow("Output", frame)
+    cv2.imshow("Paint", paintWindow)
 
-        # Displaying output on screen
-        cv2.imshow("Result", imgResult)
+    # If the user presses 's', perform OCR
+    if cv2.waitKey(1) == ord('s'):
+        cropped_image = paintWindow[67:, :, :]  # Capture drawn region
+        recognized_text = perform_ocr(cropped_image)
 
-        # Condition to break the execution of the program
-        # Press 'q' to stop the execution
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    except Exception as e:
-        print(f"An error occurred: {e}")
+        # Open the editable text window
+        open_editable_text_window(recognized_text)
+
+    # If 'q' is pressed, exit
+    if cv2.waitKey(1) == ord('q'):
         break
 
-# Release the capture and close all windows
+# Release webcam and close windows
 cap.release()
 cv2.destroyAllWindows()
